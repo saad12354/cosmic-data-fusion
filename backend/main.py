@@ -19,6 +19,14 @@ from sqlalchemy.orm import Session
 from fastapi import Depends
 import socketio
 from socket_manager import sio
+from chat_engine import ChatEngine
+from pydantic import BaseModel
+
+# Initialize Chat Engine
+chat_engine = ChatEngine()
+
+class ChatRequest(BaseModel):
+    message: str
 
 models.Base.metadata.create_all(bind=engine)
 
@@ -43,6 +51,11 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 @app.get("/")
 async def root():
     return {"message": "COSMIC Data Fusion Backend is running", "status": "online"}
+
+@app.post("/chat")
+async def chat(request: ChatRequest):
+    response = await chat_engine.generate_response(request.message)
+    return {"response": response}
 
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...), db: Session = Depends(get_db)):
@@ -146,18 +159,53 @@ async def upload_file(file: UploadFile = File(...), db: Session = Depends(get_db
              for item in result["preview"]:
                  # Map preview keys to DB columns
                  # Preview has x(RA), y(Dec), value(Brightness)
-                 db_obj = models.StandardizedData(
-                     dataset_id=db_dataset.id,
-                     original_id=str(item.get("id")),
-                     ra=item.get("x"),   # Assuming preview mapping logic handled RA->x
-                     dec=item.get("y"),  # Assuming preview mapping logic handled Dec->y
-                     brightness=item.get("value"),
-                     # Set defaults or N/A for others for now
-                     brightness_unit=result.get("metadata", {}).get("BUNIT", "unknown"),
-                     # PROACTIVE: Store AI flags if detected
-                     object_type="ANOMALY" if "ai_analysis" in result and item.get("id") in result["ai_analysis"].get("anomalies", []) else None
-                 )
-                 db.add(db_obj)
+                     # Apply standardization to preview item for consistent frontend display
+                     # and to find the temperature column
+                     
+                     # Helper to find value by standard name
+                     def get_val_by_standard(standard_key, default=None):
+                         # 1. Check if key exists directly (already standardized)
+                         if standard_key in item:
+                             return item[standard_key]
+                         
+                         # 2. Check via mapping
+                         if "standardization" in result and "mapping" in result["standardization"]:
+                             for orig, std in result["standardization"]["mapping"].items():
+                                 if std == standard_key and orig in item:
+                                     return item[orig]
+                         return default
+
+                     db_obj = models.StandardizedData(
+                         dataset_id=db_dataset.id,
+                         original_id=str(item.get("id")),
+                         ra=item.get("x"),   # Assuming preview mapping logic handled RA->x
+                         dec=item.get("y"),  # Assuming preview mapping logic handled Dec->y
+                         brightness=item.get("value"),
+                         # Captured Standardized Fields
+                         temperature=get_val_by_standard("temperature"),
+                         velocity=get_val_by_standard("velocity"),
+                         redshift=get_val_by_standard("redshift"),
+                         
+                         # Set defaults or N/A for others for now
+                         brightness_unit=result.get("metadata", {}).get("BUNIT", "unknown"),
+                         # PROACTIVE: Store AI flags if detected
+                         object_type="ANOMALY" if "ai_analysis" in result and item.get("id") in result["ai_analysis"].get("anomalies", []) else None
+                     )
+                     
+                     # Update preview item keys for frontend display (Optional but recommended)
+                     if "standardization" in result and "mapping" in result["standardization"]:
+                         # Create a copy of original keys to avoid modifying dict during iteration
+                         original_keys = list(item.keys())
+                         for orig_key in original_keys:
+                             # Find if this original key has a standardized mapping
+                             for log_entry in result["standardization"]["log"]:
+                                 if log_entry["original_column"] == orig_key:
+                                     standard_key = log_entry["standardized_column"]
+                                     if standard_key != orig_key: # Only rename if different
+                                         item[standard_key] = item.pop(orig_key)
+                                     break # Found mapping for this original key, move to next
+                     
+                     db.add(db_obj)
         
         db.commit()
         

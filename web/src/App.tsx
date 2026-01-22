@@ -13,6 +13,7 @@ import { Plus, Settings as SettingsIcon, History as HistoryIcon } from 'lucide-r
 import { Sidebar } from './components/Sidebar';
 import { CommunityForum } from './components/community/CommunityForum';
 import { QualityActivityFeed } from './components/QualityActivityFeed';
+import { ChatWidget } from './components/ChatWidget';
 
 function App() {
   const [showUpload, setShowUpload] = useState(false);
@@ -206,6 +207,8 @@ function App() {
           onUploadComplete={handleUploadComplete}
         />
       )}
+
+      <ChatWidget />
     </div>
   );
 }
